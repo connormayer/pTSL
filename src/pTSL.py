@@ -2,6 +2,7 @@ import argparse
 import csv
 from scipy.optimize import minimize
 from numpy.random import rand
+import warnings
 
 
 class pTSL():
@@ -14,6 +15,50 @@ class pTSL():
         self.probs = probs
         self.factors = factors
 
+    @classmethod
+    def from_file(cls, tier_file, factors_file):
+        '''
+            An alternative constructor that creates a pTSL object based on
+            the contents of input files. The files should have the following formats:
+
+            TIER_FILE
+            <symbol 1>,<projection 1>
+            <symbol 2>,<projection 2>
+            ...
+            <symbol n>,<projection n>
+
+            FACTORS_FILE
+            <factor 1>
+            <factor 2>
+            ...
+            <factor n>
+
+
+            <factor i> is a string of segments separated by spaces.
+            Segments do not need to be single characters.
+
+            Input:
+                tier_file: A string specifying where to find the tier file
+                factors_file: a string specifying where to find the factor file
+        '''
+
+        probs = {}
+        with open(tier_file, 'r') as csv_file:
+            csv_reader = csv.reader(csv_file)
+            for row in csv_reader:
+                if len(row) > 1:
+                    probs[row[0]] = float(row[1])
+
+        factors = []
+        with open(factors_file, 'r') as csv_file:
+            csv_reader = csv.reader(csv_file)
+            for row in csv_reader:
+                factors.append(tuple(row[0].split()))
+            if max([len(x) for x in factors]) == 1:
+                warnings.warn("Spaces seem to be missing in the factor input file", SyntaxWarning)
+
+        return pTSL(probs, factors)
+
     def get_kfactors(self, string):
         # get k based on G. The length of the longest element is k (e.g. 2 for [(a,a),(a,b),(a,c)])
         k = max([len(x) for x in self.factors])
@@ -21,7 +66,7 @@ class pTSL():
         padded_string = tuple((k-1) * ['#'] + string + (k-1) * ['#'])
         kfactors = []
         for i in range(0, len(padded_string) - k + 1):
-            kfactors.append(padded_string[i:i+k])
+            kfactors.append(padded_string[i:i + k])
         # return a list of k-factors (list of each 'window' to look at) based on G
         return kfactors
 
@@ -45,12 +90,7 @@ class pTSL():
             return [([], 1)]
 
         first, *rest = string
-        # if a symbol is in the probs
-        if first in self.probs.keys():
-            prob = self.probs[first]
-        # if a symbol is not in the probs, it is always 0 probability
-        else:
-            prob = 0
+        prob = self.probs.get(first, 0)
         projections = self.get_projections(rest)
 
         new_projections = []
@@ -59,14 +99,11 @@ class pTSL():
             new_projections.append((proj, (1 - prob) * val))
         return new_projections
 
-    '''
-        read the corpus file into data and output the conditional probabilities fore each input
-        NOTE: unused for now. Maybe useful when implementing GUI?
-    '''
     def val_corpus(self, corpus_file):
-        return self.val_corpus_helper(corpus_file)
-
-    def val_corpus_helper(self, corpus_file):
+        '''
+            read the corpus file into data and output the conditional probabilities fore each input
+            NOTE: unused for now. Maybe useful when implementing GUI?
+        '''
         # read file into data
         corpus_data = self.read_corpus_file(corpus_file)
         cond_probs = []
@@ -76,27 +113,97 @@ class pTSL():
             input_strings.append(' '.join(map(str, string)))
         return dict(zip(input_strings, cond_probs))
 
-    def print_conditional_probabilities(self, corpus_file, verbose=False):
-        # read file into data
+    def eval_conditional_probabilities(self, corpus_file,
+                                       verbose=False,
+                                       train=False,
+                                       corpus_filename=None,
+                                       projection_filename=None):
+        '''
+            evaluate conditional probabilities given corpus data.
+
+            Input:
+                corpus_file: path to the corpus file.
+                verbose: output individual projections.
+                train: do not output conditional probabilities of train.
+                corpus_filename: path to save corpus conditional probabilities.
+                projection_filename: path to save individual projections.
+        '''
         corpus_data = self.read_corpus_file(corpus_file)
-        for index, string in enumerate(corpus_data):
-            projections = self.get_projections(string)
-            result = self.val_helper(projections)
-            print("Input {}: {}".format(index+1, ' '.join(map(str, string))))
-            print("Input {} Probability: {}".format(index+1, round(result, 4)))
+        corpus_projections = []
+        for data in corpus_data:
+            corpus_projections.append([data[0], self.get_projections(data[0])])
+        # currently designed to create csv and print separately, needing two separate iterations of projections
+        if verbose and projection_filename is not None:
+            self.projections_to_csv(corpus_projections, projection_filename)
+
+        # print
+        results = []
+        for index, (string, projections) in enumerate(corpus_projections):
+            results.append(self.val_helper(projections))
+            print("Input {}: {}".format(index + 1, ' '.join(map(str, string))))
+            print("Input {} Probability: {}".format(index + 1, round(results[index], 4)))
             if verbose:
-                print("\nProjection Probabilities for input {}".format(index+1))
+                print("\nProjection Probabilities for input {}".format(index + 1))
                 for sub, value in projections:
                     if not value:
                         continue
                     print([' '.join(map(str, sub))], ': ', round(value, 3))
                 print()
 
-    def evaluate_proj(self, random_proj, param, corpus_probs):
+        if not train and corpus_filename is not None:
+            # need corpus_data and results
+            self.cond_prob_to_csv(corpus_data, results, corpus_filename)
+
+    @staticmethod
+    def cond_prob_to_csv(corpus_data, results, filename=None):
+        if not filename:
+            filename = "../output/conditional_probabilities.csv"
+        with open(filename, 'w', newline="") as f:
+            csv_writer = csv.writer(f)
+            for data, val in list(zip(corpus_data, results)):
+                csv_writer.writerow([' '.join(map(str, data[0])), round(val, 6)])
+
+    def projections_to_csv(self, corpus_projections, filename):
+        # [(['c', 'a'], 1.0), (['a'], 0.0), (['c'], 0.0), ([], 0.0)]
+        if not filename:
+            filename = "../output/projections.csv"
+        with open(filename, 'w', newline="") as f:
+            csv_writer = csv.writer(f)
+            for string, projections in corpus_projections:
+                for proj, val in projections:
+                    k_factors = self.get_kfactors(proj)
+                    illegal_k_factors = [ele1 for ele1 in k_factors
+                                         for ele2 in self.factors if ele1 == ele2]
+
+                    csv_writer.writerow([string,
+                                        ' '.join(map(str, proj)),
+                                         val,
+                                         str(list(map(' '.join, illegal_k_factors)))
+                                         ])
+
+    # unused
+    def print_conditional_probabilities(self, corpus_file, verbose=False):
+        # read file into data
+        corpus_data = self.read_corpus_file(corpus_file)
+        corpus_projections = []
+        for index, string in enumerate(corpus_data):
+            projections = self.get_projections(string)
+            result = self.val_helper(projections)
+            print("Input {}: {}".format(index + 1, ' '.join(map(str, string))))
+            print("Input {} Probability: {}".format(index + 1, round(result, 4)))
+            if verbose:
+                print("\nProjection Probabilities for input {}".format(index + 1))
+                for sub, value in projections:
+                    if not value:
+                        continue
+                    print([' '.join(map(str, sub))], ': ', round(value, 3))
+                print()
+
+    def evaluate_proj(self, proj_probs, param, corpus_probs):
         # return sum of sqaured errors
 
         for i, t in enumerate(param):
-            self.probs[t] = random_proj[i]
+            self.probs[t] = proj_probs[i]
 
         sse = 0
         for string, y in corpus_probs:
@@ -105,87 +212,47 @@ class pTSL():
         return sse
 
     def train(self, corpus_file):
-        # [[['a','b'],1],[]]
         corpus_probs = self.read_corpus_file(corpus_file, True)
         # get list of tiers
-        # from initialized ptsl (self.probs and self.factor) and corpus data, create complete list of alphabet (no duplicates)
+        # from initialized ptsl (self.probs and self.factor) and corpus data, create complete list of alphabet
         param = {x for sublist in corpus_probs for x in sublist[0]}
         # remove fixed alphabets
         param = list(param - {x for x in self.probs})
+
+        # if param is empty, meaning no free projection parameters
+        if not param:
+            raise ValueError('There are no free projection parameters in the tier input file')
 
         # create bounds
         # instead of limiting bound for fixed value, I removed it completely from the parameter
         bounds = [(0, 1) for i in range(len(param))]
 
-        # bounds = []
-        # for t in param:
-        #     if t in self.probs:
-        #         bounds.append((self.probs[t], self.probs[t]))
-        #     else:
-        #         bounds.append((0, 1))
-
         # randomly initialize parameter - this will be the input
-        random_proj = rand(len(param))
+        proj_probs = rand(len(param))
         # run the minimize function
         proj_res = minimize(self.evaluate_proj,
-                            random_proj,
+                            proj_probs,
                             bounds=bounds,
                             method='L-BFGS-B',
                             args=(param, corpus_probs))
 
-        optimal_projection = dict(zip(param, proj_res.x))
-        self.probs.update(optimal_projection)
+    def print_optimal_projection_probabilities(self, corpus_file):
+        self.train(corpus_file)
+        print("Optimal projection probabilities:")
+        self.print_projection_probabilities()
 
-    def print_projections(self):
+    def print_projection_probabilities(self):
         for key in sorted(self.probs.keys()):
             print("{}: {}".format(key, round(self.probs[key], 4)))
+            print()
 
-    ''' 
-    initialize pTSL based on the given path to files (tier, prob, grammar)
-    '''
-    @classmethod
-    def from_file(cls, tier_file, factors_file, verbose=False):
-        '''
-            An alternative constructor that creates a pTSL object based on
-            the contents of input files. The files should have the following formats:
-
-            TIER_FILE
-            <symbol 1> <projection 1>
-            <symbol 2> <projection 2>
-            ...
-            <symbol n> <projection n>
-
-            FACTORS_FILE
-            <factor 1>
-            <factor 2>
-            ...
-            <factor n>
-
-
-            <factor i> is a segment separated by spaces.
-            Segments do not need to be single characters.
-
-            Input:
-                tier_file: A string specifying where to find the tier file.
-                factors_file: a string specifying where to find the factor file
-        '''
-
-        probs = {}
-        with open(tier_file, 'r') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            for row in csv_reader:
-                if len(row) == 1:
-                    probs[row[0]] = 0
-                else:
-                    probs[row[0]] = float(row[1])
-
-        factors = []
-        with open(factors_file, 'r') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            for row in csv_reader:
-                factors.append(tuple(row[0].split()))
-
-        return pTSL(probs, factors)
+    def probs_to_csv(self, filename=None):
+        if not filename:
+            filename = "../output/predicted_tier_probs.csv"
+        with open(filename, 'w', newline="") as f:
+            csv_writer = csv.writer(f)
+            for key, value in self.probs.items():
+                csv_writer.writerow([key, value])
 
     @staticmethod
     def read_corpus_file(corpus_file, train=False):
@@ -193,30 +260,40 @@ class pTSL():
             Read corpus data from a file
             The file should have the following formats:
 
-            <string 1> <probability 1>
-            <string 2> <probability 1>
+            <string 1>,<probability 1>
+            <string 2>,<probability 1>
             ...
-            <string n> <probability 1>
+            <string n>,<probability 1>
 
 
-            <string i> is a segment separated by spaces.
+            <string i> is a string of segments separated by spaces.
             Segments do not need to be single characters.
 
-            probabilities are optional. They are used for the purpose of learning projection probabilities.
+            Probabilities are optional. They are only used when train == True
 
             Input:
                 corpus_file: A string specifying where to find the corpus file
-                train:
+                train: If True, save probabilities along with the corpus strings
         '''
         corpus_data = []
         with open(corpus_file, 'r') as csv_file:
             csv_reader = csv.reader(csv_file)
+            max_length = 0
             if train:
                 for row in csv_reader:
-                    corpus_data.append([row[0].split(), float(row[1])])
+                    max_length = max(max_length, len(row[0].split()))
+                    try:
+                        corpus_data.append([row[0].split(), float(row[1])])
+                    except IndexError:
+                        print("Missing corpus file probabilities")
+
             else:
                 for row in csv_reader:
-                    corpus_data.append(row[0].split())
+                    max_length = max(max_length, len(row[0].split()))
+                    corpus_data.append([row[0].split()])
+
+            if max_length <= 1:
+                warnings.warn("Spaces seem to be missing in the corpus input file", SyntaxWarning)
 
         return corpus_data
 
@@ -233,7 +310,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         '--train', action='store_true',
-        help='The path to the file corpus with probabilities.'
+        help='Learn optimal projection probabilities to match input data.'
     )
 
     parser.add_argument(
@@ -241,23 +318,53 @@ if __name__ == "__main__":
         help='Prints probabilities for each possible projection.'
     )
 
-    # parser.add_argument(
-    #     '--output_file', type=str, default=None,
-    #     help='Path to csv file to save probabilities.',
-    # )
+    parser.add_argument(
+        '--output_file', type=str, default=[None, None], nargs='*',
+        help='Path to either tier probabilities or corpus conditional probabilities.'
+             'If verbose, pass another path to projections as the second argument.'
+    )
 
     args = parser.parse_args()
+
     input_tier = args.input_file[0]
     input_factors = args.input_file[1]
     input_corpus = args.input_file[2]
 
+    if not args.output_file:
+        # --output flag with no arguments
+        output_file = ''
+        output_proj_file = ''
+    elif len(args.output_file) == 1:
+        # --output flag with one argument
+        output_file = args.output_file[0]
+        output_proj_file = ''
+    elif not args.output_file[0]:
+        # no --output flag
+        output_file = None
+        output_proj_file = None
+    else:
+        # --output flag with two arguments
+        output_file = args.output_file[0]
+        output_proj_file = args.output_file[1]
+
     ptsl = pTSL.from_file(input_tier, input_factors)
     if args.train:
-        ptsl.train(input_corpus)
-        ptsl.print_projections()
-
-        ptsl.print_conditional_probabilities(input_corpus, args.verbose)
+        # train and update ptsl
+        ptsl.print_optimal_projection_probabilities(input_corpus)
+        # save probs
+        if output_file is not None:
+            ptsl.probs_to_csv(output_file)
+        # if verbose, evaluate as normal and save and print proj
+        ptsl.eval_conditional_probabilities(input_corpus,
+                                            args.verbose,
+                                            args.train,
+                                            output_file,
+                                            output_proj_file)
 
     else:
-        ptsl.print_conditional_probabilities(input_corpus, args.verbose)
-
+        # evaluate (during evaluate, save and print proj if verbose)
+        ptsl.eval_conditional_probabilities(input_corpus,
+                                            args.verbose,
+                                            args.train,
+                                            output_file,
+                                            output_proj_file)

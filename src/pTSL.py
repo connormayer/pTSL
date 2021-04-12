@@ -2,6 +2,7 @@ import argparse
 import csv
 from scipy.optimize import minimize
 from numpy.random import rand
+import TSL
 import warnings
 
 DEFAULT_PROB_FILENAME = "../output/conditional_probabilities.csv"
@@ -62,6 +63,17 @@ class pTSL():
                 factors.append(tuple(row[0].split()))
             if max([len(x) for x in factors]) == 1:
                 warnings.warn("Spaces seem to be missing in the factor input file", SyntaxWarning)
+
+        return pTSL(probs, factors)
+
+    @classmethod
+    def TSL_to_pTSL(cls, tsl_grammar):
+        probs = {}
+
+        for tier in tsl_grammar.tier:
+            probs[tier] = 1.0
+
+        factors = tsl_grammar.k_factors
 
         return pTSL(probs, factors)
 
@@ -227,6 +239,27 @@ class pTSL():
             for key, value in self.probs.items():
                 csv_writer.writerow([key, value])
 
+    def pTSL_to_TSL(self):
+        '''
+            Case 1:
+                If the k-factors in pTSL grammar contain only symbols with a projection prob < 1, then
+                conversion is trivial.
+            Case 2:
+                If the k-factors in pTSL grammar contain only symbols with a projection prob of 1, then
+                conversion is possible.
+        :return: TSL grammar
+        '''
+        # case 1
+        if all([all([self.probs[sym] < 1 for sym in factor]) for factor in self.factors]):
+            return TSL.TSL([], [])
+
+        # case 2
+        if all([all([self.probs[sym] == 1 for sym in factor]) for factor in self.factors]):
+            tier = [x for x in self.probs if self.probs[x] > 0]
+            return TSL.TSL(tier, self.factors)
+
+        raise ValueError("Conversion from pTSL to TSL not possible")
+
     @staticmethod
     def read_corpus_file(corpus_file, train=False):
         '''
@@ -297,6 +330,17 @@ if __name__ == "__main__":
              'If verbose, pass another path to projections as the second argument.'
     )
 
+    parser.add_argument(
+        '--TSL', action='store_true',
+        help='Convert TSL grammar to pTSL grammar'
+    )
+
+    # parser.add_argument(
+    #     '--to_TSL', action='store_true',
+    #     help='Convert pTSL grammar to TSL grammar'
+    # )
+
+
     args = parser.parse_args()
 
     input_tier = args.input_file[0]
@@ -320,7 +364,14 @@ if __name__ == "__main__":
         output_file = args.output_file[0]
         output_proj_file = args.output_file[1]
 
-    ptsl = pTSL.from_file(input_tier, input_factors)
+    if args.TSL:
+        tsl = TSL.TSL.from_file(input_tier,input_factors)
+        ptsl = pTSL.TSL_to_pTSL(tsl)
+
+    else:
+        ptsl = pTSL.from_file(input_tier, input_factors)
+
+
     if args.train:
         # train and update ptsl
         ptsl.print_optimal_projection_probabilities(input_corpus)

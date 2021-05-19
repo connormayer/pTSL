@@ -8,8 +8,11 @@ import warnings
 DEFAULT_PROB_FILENAME = "../output/conditional_probabilities.csv"
 DEFAULT_PROJECTION_FILENAME = "../output/projections.csv"
 DEFAULT_TIER_PROB_FILENAME = "../output/predicted_tier_probs.csv"
+DEFAULT_TSL_TIER_FILENAME = "../output/tsl_tier.csv"
+DEFAULT_TSL_FACTOR_FILENAME = "../output/tsl_factor.csv"
 
-class pTSL():
+
+class pTSL:
     '''
         probs is the set of prob projection, factors is the strictly k-local grammar
         probs is a dictionary e.g. (a : 0.55)
@@ -46,7 +49,7 @@ class pTSL():
 
             Input:
                 tier_file: A string specifying where to find the tier file
-                factors_file: a string specifying where to find the factor file
+                factors_file: A string specifying where to find the factor file
         '''
 
         probs = {}
@@ -66,19 +69,12 @@ class pTSL():
 
         return pTSL(probs, factors)
 
-    @classmethod
-    def TSL_to_pTSL(cls, tsl_grammar):
-        probs = {}
-
-        for tier in tsl_grammar.tier:
-            probs[tier] = 1.0
-
-        factors = tsl_grammar.k_factors
-
-        return pTSL(probs, factors)
 
     def get_kfactors(self, string):
-        # get k based on G. The length of the longest element is k (e.g. 2 for [(a,a),(a,b),(a,c)])
+        '''
+            get k based on G. The length of the longest element is k (e.g. 2 for [(a,a),(a,b),(a,c)])
+        '''
+
         k = max([len(x) for x in self.factors])
         # pad the string as ###string####
         padded_string = tuple((k-1) * ['#'] + string + (k-1) * ['#'])
@@ -157,16 +153,10 @@ class pTSL():
             # need corpus_data and results
             self.cond_prob_to_csv(corpus_data, results, corpus_filename)
 
-    @staticmethod
-    def cond_prob_to_csv(corpus_data, results, filename=None):
-        if not filename:
-            filename = DEFAULT_PROB_FILENAME
-        with open(filename, 'w', newline="") as f:
-            csv_writer = csv.writer(f)
-            for data, val in list(zip(corpus_data, results)):
-                csv_writer.writerow([' '.join(map(str, data[0])), round(val, 6)])
-
     def projections_to_csv(self, corpus_projections, filename):
+        '''
+            Save the corpus projections to the output filename
+        '''
         # [(['c', 'a'], 1.0), (['a'], 0.0), (['c'], 0.0), ([], 0.0)]
         if not filename:
             filename = DEFAULT_PROJECTION_FILENAME
@@ -197,6 +187,9 @@ class pTSL():
         return sse
 
     def train(self, corpus_file):
+        '''
+            Given the corpus file with corpus data and it's conditional probabilities, update the prob projections
+        '''
         corpus_probs = self.read_corpus_file(corpus_file, True)
         # get list of tiers
         # from initialized ptsl (self.probs and self.factor) and corpus data, create complete list of alphabet
@@ -239,26 +232,53 @@ class pTSL():
             for key, value in self.probs.items():
                 csv_writer.writerow([key, value])
 
-    def pTSL_to_TSL(self):
+    def pTSL_to_TSL(self, tier_filename=None, factor_filename=None):
         '''
+            Convert pTSL grammar to TSL and output a TSL grammar by saving the tier and k-factor files.
+
             Case 1:
                 If the k-factors in pTSL grammar contain only symbols with a projection prob < 1, then
                 conversion is trivial.
             Case 2:
                 If the k-factors in pTSL grammar contain only symbols with a projection prob of 1, then
                 conversion is possible.
-        :return: TSL grammar
+
         '''
-        # case 1
+        if not tier_filename:
+            filename = DEFAULT_TSL_TIER_FILENAME
+        if not factor_filename:
+            filename = DEFAULT_TSL_FACTOR_FILENAME
+
+        # case 1 -  trivial case, all inputs accepted. Since no factor exists, choice of Tier is not relevant
+        #           instead of generating two empty files, following message is printed
         if all([all([self.probs[sym] < 1 for sym in factor]) for factor in self.factors]):
-            return TSL.TSL([], [])
+            print("Trivial conversion from pTSL to TSL - accepts all inputs.")
+            return
 
         # case 2
         if all([all([self.probs[sym] == 1 for sym in factor]) for factor in self.factors]):
             tier = [x for x in self.probs if self.probs[x] > 0]
-            return TSL.TSL(tier, self.factors)
+            with open(tier_filename, 'w', newline="") as f:
+                csv_writer = csv.writer(f)
+                for sym in tier:
+                    csv_writer.writerow(sym)
+
+            with open(factor_filename, 'w', newline="") as f:
+                csv_writer = csv.writer(f)
+                for sym in self.factors:
+                    csv_writer.writerow(sym)
+            return
 
         raise ValueError("Conversion from pTSL to TSL not possible")
+
+    @staticmethod
+    def cond_prob_to_csv(corpus_data, results, filename=None):
+        if not filename:
+            filename = DEFAULT_PROB_FILENAME
+        with open(filename, 'w', newline="") as f:
+            csv_writer = csv.writer(f)
+            for data, val in list(zip(corpus_data, results)):
+                csv_writer.writerow([' '.join(map(str, data[0])), round(val, 6)])
 
     @staticmethod
     def read_corpus_file(corpus_file, train=False):
@@ -310,7 +330,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        'input_file', type=str, action='store', nargs=3,
+        'input_file', type=str, action='store', nargs='*',
         help='Paths to the tier-projection file, factors file, and input corpus file.'
     )
 
@@ -331,64 +351,64 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        '--TSL', action='store_true',
-        help='Convert TSL grammar to pTSL grammar'
+        '--to_tsl', action='store_true',
+        help='Convert pTSL grammar to TSL grammar (if possible).'
     )
 
-    # parser.add_argument(
-    #     '--to_TSL', action='store_true',
-    #     help='Convert pTSL grammar to TSL grammar'
-    # )
-
+    parser.add_argument(
+        '--tsl_output_file', type=str, default=[None, None], nargs=2,
+        help='Path to tier file and k-factor file of TSL grammar.'
+    )
 
     args = parser.parse_args()
 
-    input_tier = args.input_file[0]
-    input_factors = args.input_file[1]
-    input_corpus = args.input_file[2]
-
-    if not args.output_file:
-        # --output flag with no arguments
-        output_file = ''
-        output_proj_file = ''
-    elif len(args.output_file) == 1:
-        # --output flag with one argument
-        output_file = args.output_file[0]
-        output_proj_file = ''
-    elif not args.output_file[0]:
-        # no --output flag
-        output_file = None
-        output_proj_file = None
-    else:
-        # --output flag with two arguments
-        output_file = args.output_file[0]
-        output_proj_file = args.output_file[1]
-
-    if args.TSL:
-        tsl = TSL.TSL.from_file(input_tier,input_factors)
-        ptsl = pTSL.TSL_to_pTSL(tsl)
+    if args.to_tsl:
+        input_tier = args.input_file[0]
+        input_factors = args.input_file[1]
+        ptsl = pTSL.from_file(input_tier, input_factors)
+        ptsl.pTSL_to_TSL(args.tsl_output_file[0], args.tsl_output_file[1])
 
     else:
+        input_tier = args.input_file[0]
+        input_factors = args.input_file[1]
+        input_corpus = args.input_file[2]
+
+        if not args.output_file:
+            # --output flag with no arguments
+            output_file = ''
+            output_proj_file = ''
+        elif len(args.output_file) == 1:
+            # --output flag with one argument
+            output_file = args.output_file[0]
+            output_proj_file = ''
+        elif not args.output_file[0]:
+            # no --output flag
+            output_file = None
+            output_proj_file = None
+        else:
+            # --output flag with two arguments
+            output_file = args.output_file[0]
+            output_proj_file = args.output_file[1]
+
         ptsl = pTSL.from_file(input_tier, input_factors)
 
+        if args.train:
+            # train and update ptsl
+            ptsl.print_optimal_projection_probabilities(input_corpus)
+            # save probs
+            if output_file is not None:
+                ptsl.probs_to_csv(output_file)
+            # if verbose, evaluate as normal and save and print proj
+            ptsl.eval_conditional_probabilities(input_corpus,
+                                                args.verbose,
+                                                args.train,
+                                                output_file,
+                                                output_proj_file)
 
-    if args.train:
-        # train and update ptsl
-        ptsl.print_optimal_projection_probabilities(input_corpus)
-        # save probs
-        if output_file is not None:
-            ptsl.probs_to_csv(output_file)
-        # if verbose, evaluate as normal and save and print proj
-        ptsl.eval_conditional_probabilities(input_corpus,
-                                            args.verbose,
-                                            args.train,
-                                            output_file,
-                                            output_proj_file)
-
-    else:
-        # evaluate (during evaluate, save and print proj if verbose)
-        ptsl.eval_conditional_probabilities(input_corpus,
-                                            args.verbose,
-                                            args.train,
-                                            output_file,
-                                            output_proj_file)
+        else:
+            # evaluate (during evaluate, save and print proj if verbose)
+            ptsl.eval_conditional_probabilities(input_corpus,
+                                                args.verbose,
+                                                args.train,
+                                                output_file,
+                                                output_proj_file)

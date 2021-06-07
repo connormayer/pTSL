@@ -16,7 +16,14 @@ class TSL:
     def __init__(self, tier, k_factors):
         self.tier = tier
         self.k_factors = k_factors
-        self.k = max([len(f) for f in self.k_factors])
+        k_lengths = len(set([len(f) for f in self.k_factors]))
+        if k_lengths > 1:
+            raise ValueError('All k-factors must be of the same length')
+        elif k_lengths == 1:
+            self.k = len(self.k_factors[0])
+        else:
+            # does not matter since k_factor is empty.
+            self.k = 0
 
     @classmethod
     def from_file(cls, tier_file, factors_file):
@@ -37,8 +44,8 @@ class TSL:
             <factor n>
 
 
-            <symbol i> is a single segment with no spaces. Each segment is a tier alphabet.
-            <factor i> is a string of segments separated by spaces.
+            <symbol i>  is a member of the tier alphabet, and consists of one or more characters without spaces.
+            <factor i> is a string of segments from the tier alphabet.
             Segments do not need to be single characters.
 
             Input:
@@ -109,12 +116,16 @@ class TSL:
         for string in corpus_data:
             results.append(self.val(string))
 
-        self.eval_to_csv(corpus_data, results, corpus_filename)
+        for index, string in enumerate(corpus_data):
+            print("Input {}: {}".format(index + 1, ' '.join(map(str, string))))
+            print("{}".format(results[index]))
 
-    def TSL_to_pTSL(self, tier_filename, factor_filename):
+        if corpus_filename is not None:
+            self.eval_to_csv(corpus_data, results, corpus_filename)
+
+    def to_pTSL(self, tier_filename, factor_filename):
         '''
             Convert TSL grammar to pTSL and output a pTSL grammar by saving the tier and k-factor files.
-
         '''
         if not tier_filename:
             filename = DEFAULT_PTSL_TIER_FILENAME
@@ -122,8 +133,8 @@ class TSL:
             filename = DEFAULT_PTSL_FACTOR_FILENAME
         probs = {}
 
-        for tier in self.tier:
-            probs[tier] = 1.0
+        for sym in self.tier:
+            probs[sym] = 1.0
 
         factors = self.k_factors
 
@@ -133,7 +144,7 @@ class TSL:
                 csv_writer.writerow([key, value])
 
         with open(factor_filename, 'w', newline="") as f:
-            csv_writer = csv.writer(f)
+            csv_writer = csv.writer(f, delimiter=' ')
             for sym in factors:
                 csv_writer.writerow(sym)
 
@@ -147,7 +158,7 @@ class TSL:
         with open(filename, 'w', newline="") as f:
             csv_writer = csv.writer(f)
             for data, val in list(zip(corpus_data, results)):
-                csv_writer.writerow([' '.join(map(str, data)), round(val, 6)])
+                csv_writer.writerow([' '.join(map(str, data)), val])
 
     @staticmethod
     def read_corpus_file(corpus_file):
@@ -186,12 +197,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        'input_file', type=str, action='store', nargs=3,
-        help='Paths to the tier file, factors file, and input corpus file.'
+        'input_tier_file', type=str, action='store', nargs=1,
+        help='Path to the tier-projection file.'
     )
 
     parser.add_argument(
-        '--output_file', type=str, default=None,
+        'input_factor_file', type=str, action='store', nargs=1,
+        help='Path to the factors file.'
+    )
+
+    parser.add_argument(
+        '--input_corpus_file', type=str, action='store', default=None, nargs='?',
+        help='Path to the input corpus file.'
+    )
+
+    parser.add_argument(
+        '--output_file', type=str, default=None, const="", nargs='?',
         help='Path to corpus eval results.'
     )
 
@@ -201,24 +222,28 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        '--ptsl_output_file', type=str, default=[None, None], nargs=2,
+        '--ptsl_output_files', type=str, default=[None, None], nargs=2,
         help='Path to tier file and k-factor file of pTSL grammar'
     )
 
     args = parser.parse_args()
 
     if args.to_ptsl:
-        input_tier = args.input_file[0]
-        input_factors = args.input_file[1]
+        input_tier = args.input_tier_file[0]
+        input_factors = args.input_factor_file[0]
         tsl = TSL.from_file(input_tier, input_factors)
-        tsl.TSL_to_pTSL(args.ptsl_output_file[0], args.ptsl_output_file[1])
+        tsl.to_pTSL(args.ptsl_output_files[0], args.ptsl_output_files[1])
 
-    else:
-        input_tier = args.input_file[0]
-        input_factors = args.input_file[1]
-        input_corpus = args.input_file[2]
+    elif args.input_corpus_file:
+        input_tier = args.input_tier_file[0]
+        input_factors = args.input_factor_file[0]
+        input_corpus = args.input_corpus_file
         output_file = args.output_file
 
         tsl = TSL.from_file(input_tier, input_factors)
         tsl.eval_corpus(input_corpus, output_file)
+
+    # missing both the to_ptsl and input_corpus_file arguments
+    else:
+        raise SyntaxError('At least one of the "--input_tier_file" or "--to_ptsl" flag is required.')
 
